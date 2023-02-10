@@ -1,36 +1,55 @@
-# Check to make sure no non-free modules are enabled
-
-name: module_check
-
-# Controls when the workflow will run
+name: Aqua
 on:
-  # Triggers the workflow on push or pull request events but only for the main branch
   push:
-    branches: [ main ]
-    paths:
-    - 'main.tf'  
-  pull_request:
-    branches: [ main ]
-    paths:
-    - 'main.tf'
-
-  # Allows you to run this workflow manually from the Actions tab
-  workflow_dispatch:
-
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+    branches:
+      - main
 jobs:
-  # This workflow contains a single job called "build"
-  build:
-    # The type of runner that the job will run on
+  aqua:
+    name: Aqua scanner
     runs-on: ubuntu-latest
-
-    # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      - uses: actions/checkout@v2
+      - name: Checkout code
+        uses: actions/checkout@v2
+      - name: Login to DockerHub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # Runs a single command using the runners shell
-      - name: Run a script
+      - name: Run Aqua scanner
+        uses: docker://aquasec/aqua-scanner
+        with:
+          args: trivy fs --sast --package-json --security-checks config,vuln,secret . 
+          # Customizing which severities are scanned for is done by adding the following flag: --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+        env:
+          AQUA_KEY: ${{ secrets.AQUA_KEY }}
+          AQUA_SECRET: ${{ secrets.AQUA_SECRET }}
+          TRIVY_RUN_AS_PLUGIN: 'aqua'
+          TRIGGERED_BY: 'PUSH'
+          GITHUB_TOKEN: ${{ github.token }}          
+      - name: Build and push
+        uses: docker/build-push-action@v3
+        with:
+          push: true
+          tags: "aquajcampbell/grphql-vulnerable:${{ github.sha }}"
+      - name: Manifest Generation
         run: |
-          chmod +x .github/workflows/module_check.sh
-          .github/workflows/module_check.sh
+          export BILLY_SERVER=https://billy.codesec.aquasec.com
+          curl -sLo install.sh download.codesec.aquasec.com/billy/install.sh
+          curl -sLo install.sh.checksum https://github.com/argonsecurity/releases/releases/latest/download/install.sh.checksum
+          if ! cat install.sh.checksum | sha256sum ; then
+          echo "install.sh checksum failed"
+          exit 1
+          fi
+          BINDIR="." sh install.sh
+          rm install.sh install.sh.checksum
+          ./billy generate \
+            --access-token "${{ secrets.GITHUB_TOKEN }}" \
+            --aqua-key "${{ secrets.AQUA_KEY }}" \
+            --aqua-secret "${{ secrets.AQUA_SECRET }}" \
+            --artifact-path "aquajcampbell/grphql-vulnerable:${{ github.sha }}" 
+            # The docker image name:tag of the newly built image
+            # --artifact-path "my-image-name:${{ env.tag-version }}" 
+            # OR the path to the root folder of your project. I.e my-repo/my-app 
+            # --artifact-path "${{env.MY_APP_ROOT}}"
+            # --something, something, something, Darkside
